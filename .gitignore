@@ -1,0 +1,5 @@
+Pipfile
+Lib
+Scripts
+/data
+pyvenv.cfg
