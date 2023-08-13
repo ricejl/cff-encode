@@ -82,7 +82,7 @@ def get_batch_download_text_file(api_url : str, filename : str):
         print("API call failed")
 
 
-def get_file(accessionNum: str):
+def get_file_from_api(accessionNum: str):
     # Force return from the server in JSON format
     headers = {'accept': 'application/json'}
     
@@ -90,26 +90,13 @@ def get_file(accessionNum: str):
     # url = f'https://www.encodeproject.org/biosample/{accessionNum}/?frame=object'
     url = f'https://www.encodeproject.org/files/{accessionNum}/?frame=object'
     
-    response = requests.get(url, headers=headers)
+    return requests.get(url, headers=headers).json()
 
-    # Extract the JSON response as a Python dictionary
-    # biosample = response.json()
-    file = response.json()
-
-    # return file instead of writing each one
-    return file
-
-    # Write to file
-    f = open(f'data/{accessionNum}.json', 'w')
-    # f.write(json.dumps(biosample, indent=4))
-    f.write(json.dumps(file, indent=4))
-    f.close()
 
 def get_fastq_file_urls(filename):
     with open(f'data/{filename}.txt') as file:
         text_data = file.read()
         data_list = {}
-        # print(text_data)
         lines = text_data.split('\n')[1:-1]
         for line in lines:
             # Process each line and split into fields
@@ -126,33 +113,24 @@ def match_exper_to_controls(df):
     for exper_accession in exper_accessions:
         exper_urls = get_fastq_file_urls('experimental-batch')
         if exper_accession in exper_urls:
+            exper_file = get_file_from_api(exper_accession)
+            possible_controls = exper_file.get('possible_controls', [])
 
-            # FIXME: seems to be equally, abysmally slow loading from a file vs in mem
-            exper_file = get_file(exper_accession) 
-            # Load JSON data from file
-            # with open(f'data/{exper_accession}.json') as json_file:
-            #     exper_file = json.load(json_file)
-            
-
-            if 'possible_controls' in exper_file:
-                control_urls = get_fastq_file_urls('control-batch')
-
-                for control in exper_file['possible_controls']:
-                    print(control)
+            data = []
+            if len(possible_controls) > 0:
+                for control in possible_controls:
+                    control_urls = get_fastq_file_urls('control-batch')
                     control_accession = control.split('/')[2]
-                    print(control_accession)
+
                     if control_accession in control_urls:
                         control_file_str = control_urls[control_accession]
-                        # df = df.append({'experimental_file': exper_urls[exper_accession], 'control_file': control_file_str}, ignore_index=True)
-                        df = pd.concat([df, pd.DataFrame({'experimental_file': exper_urls[exper_accession], 'control_file': control_file_str})], ignore_index=True)
+                        data.append({'experimental_file': exper_urls[exper_accession], 'control_file': control_file_str})
                     else:
-                        df = pd.concat([df, pd.DataFrame({'experimental_file': exper_urls[exper_accession]})], ignore_index=True)
-                        # df = df.append({'experimental_file': exper_urls[exper_accession]}, ignore_index=True)
-
+                        data.append({'experimental_file': exper_urls[exper_accession]})
             else:
-                df = pd.concat([df, pd.DataFrame({'experimental_file': exper_urls[exper_accession]})], ignore_index=True)
+                data.append({'experimental_file': exper_urls[exper_accession]})
 
-                # df = df.append({'experimental_file': exper_urls[exper_accession]}, ignore_index=True)
+            df = pd.concat([df, pd.DataFrame(data)], ignore_index=True)
             
         # for control_accession in exper_file.possible_controls:
         #     control = get_file(control_accession)
@@ -200,4 +178,3 @@ get_search_results(search_url_controls, 'controls-search-results')
 match_exper_to_controls(df)
 
 print(df)
-
