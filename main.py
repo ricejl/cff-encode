@@ -1,6 +1,14 @@
 import requests, json
+import pandas as pd
 
-def write_data_to_file(response, filename):
+# result_type options
+BATCH_DOWNLOAD = 'batch_download'
+SEARCH = 'search'
+# groups
+EXPERIMENTAL = 'experimental'
+CONTROL = 'control'
+
+def write_data_to_json_file(response, filename):
     # Write to file
     f = open(f'data/{filename}.json', 'w')
     f.write(json.dumps(response, indent=4))
@@ -15,6 +23,7 @@ def write_data_to_file(response, filename):
 
     # print(f"Number of results, {filename}: {num_results}")
 
+
 def get_accession_numbers(filename):
     accession_numbers = []
     # Load JSON data from file
@@ -25,9 +34,7 @@ def get_accession_numbers(filename):
         return accession_numbers
 
 
-def get_search_result():
-    headers = {'accept': 'application/json'}
-
+def build_url(result_type : str, control_type : str):
     TYPE = 'Experiment'
     BIOSAMPLE_ONTOLOGY_TERM_NAME = 'HCT116'
     ASSAY_TERM_NAME_CHIP = 'ChIP-seq'
@@ -36,41 +43,53 @@ def get_search_result():
     DATE_RELEASED_END = '2015-12-31'
     IS_CONTROL_TYPE = '&control_type=*'
     NOT_CONTROL_TYPE = '&control_type!=*'
+    FILE_TYPE = '&files.file_type=fastq'
     LIMIT = 'all'
 
-    # TODO: put urls in array and loop over to get data (make get calls and write to file)
-    # url = 'https://www.encodeproject.org/search/?type=Experiment&biosample_ontology.term_name=HCT116&assay_title=Mint-ChIP-seq&assay_title=Control+Mint-ChIP-seq&assay_title=TF+ChIP-seq&assay_title=Control+ChIP-seq&assay_title=Histone+ChIP-seq'
-    url = ('https://www.encodeproject.org/search/?type=' + TYPE +
+    url = (f'https://www.encodeproject.org/{result_type}/' +
+           '?type=' + TYPE +
            '&biosample_ontology.term_name=' + BIOSAMPLE_ONTOLOGY_TERM_NAME +
            '&assay_term_name=' + ASSAY_TERM_NAME_CHIP +
            '&assay_term_name=' + ASSAY_TERM_NAME_MC +
            '&advancedQuery=date_released:[' + DATE_RELEASED_START + '%20TO%20' + DATE_RELEASED_END + ']' +
+           '&files.file_type=' + FILE_TYPE +
            '&limit=' + LIMIT)
     
-    url_for_controls = url + IS_CONTROL_TYPE
-    url_for_experimentals = url + NOT_CONTROL_TYPE
+    if control_type == 'control':
+        return url + IS_CONTROL_TYPE
+    elif control_type == 'experimental':
+        return url + NOT_CONTROL_TYPE
+    return url
 
-    # TODO: do these automatically await?
+
+def get_search_results(url, filename):
+    headers = {'accept': 'application/json'}
     response = requests.get(url, headers=headers).json()
-    controls_response = requests.get(url_for_controls, headers=headers).json()
-    exper_response = requests.get(url_for_experimentals, headers=headers).json()
+    write_data_to_json_file(response, filename)
 
-    write_data_to_file(response, 'all-results')
-    write_data_to_file(controls_response, 'controls-results')
-    write_data_to_file(exper_response, 'exper-results')
+
+def get_batch_download_text_file(api_url : str, filename : str):
+    response = requests.get(api_url)
+
+    if response.status_code == 200:
+        data = response.text
+
+        # write to file
+        f = open(f'data/{filename}-batch.txt', 'w')
+        f.write(data)
+        f.close()
+    else:
+        print("API call failed")
 
 
 def get_file(accessionNum: str):
-
     # Force return from the server in JSON format
     headers = {'accept': 'application/json'}
     
     # This URL locates the ENCODE biosample with accession number ENCBS000AAA
     # url = f'https://www.encodeproject.org/biosample/{accessionNum}/?frame=object'
     url = f'https://www.encodeproject.org/files/{accessionNum}/?frame=object'
-
     
-    # GET the object
     response = requests.get(url, headers=headers)
 
     # Extract the JSON response as a Python dictionary
@@ -79,29 +98,62 @@ def get_file(accessionNum: str):
 
     # return file instead of writing each one
     return file
-    # Print the Python object
-    # print(json.dumps(biosample, indent=4))
-    print(json.dumps(file, indent=4))
 
     # Write to file
-    # f = open(f'data/{accessionNum}.json', 'w')
     f = open(f'data/{accessionNum}.json', 'w')
     # f.write(json.dumps(biosample, indent=4))
     f.write(json.dumps(file, indent=4))
     f.close()
 
+def get_fastq_file_urls(filename):
+    with open(f'data/{filename}.txt') as file:
+        text_data = file.read()
+        data_list = {}
+        # print(text_data)
+        lines = text_data.split('\n')[1:-1]
+        for line in lines:
+            # Process each line and split into fields
+            split_line = line.split('/')
+            files_index = split_line.index('files')
+            accession = split_line[files_index + 1]
+            data_list[accession] = line
+        return data_list
 
-def match_exper_to_controls():
-    experimental_accession_numbers = get_accession_numbers('exper-results')
 
-    for exper_accession in experimental_accession_numbers:
+def match_exper_to_controls(df):
+    exper_accessions = get_accession_numbers('exper-search-results')
 
-        exper_file = get_file(exper_accession)
+    for exper_accession in exper_accessions:
+        exper_urls = get_fastq_file_urls('experimental-batch')
+        if exper_accession in exper_urls:
 
-        if hasattr(exper_file, 'possible_controls'):
-            print(f'YES for {exper_accession}')
-        else:
-            print(f'no possible control listed for {exper_accession}')
+            # FIXME: seems to be equally, abysmally slow loading from a file vs in mem
+            exper_file = get_file(exper_accession) 
+            # Load JSON data from file
+            # with open(f'data/{exper_accession}.json') as json_file:
+            #     exper_file = json.load(json_file)
+            
+
+            if 'possible_controls' in exper_file:
+                control_urls = get_fastq_file_urls('control-batch')
+
+                for control in exper_file['possible_controls']:
+                    print(control)
+                    control_accession = control.split('/')[2]
+                    print(control_accession)
+                    if control_accession in control_urls:
+                        control_file_str = control_urls[control_accession]
+                        # df = df.append({'experimental_file': exper_urls[exper_accession], 'control_file': control_file_str}, ignore_index=True)
+                        df = pd.concat([df, pd.DataFrame({'experimental_file': exper_urls[exper_accession], 'control_file': control_file_str})], ignore_index=True)
+                    else:
+                        df = pd.concat([df, pd.DataFrame({'experimental_file': exper_urls[exper_accession]})], ignore_index=True)
+                        # df = df.append({'experimental_file': exper_urls[exper_accession]}, ignore_index=True)
+
+            else:
+                df = pd.concat([df, pd.DataFrame({'experimental_file': exper_urls[exper_accession]})], ignore_index=True)
+
+                # df = df.append({'experimental_file': exper_urls[exper_accession]}, ignore_index=True)
+            
         # for control_accession in exper_file.possible_controls:
         #     control = get_file(control_accession)
 
@@ -112,10 +164,40 @@ def match_exper_to_controls():
         #     print(f'~~~EXPER: {url_exper} & CONTROL: {url_control}')
             # add exper file and control file(s) to table
 
+"""
+TODO:
+create a table with experimental files in first column and controls in second
+download experimentals text file
+download controls text file
+run search for experimental files and get array of accessions
+download each experimental file in array of accessions
+loop through files to get possible_controls from each
+for each possible_control add a row to the dataframe with the experimental fastq file and the control fastq file
+if there are no possible controls, add the exper fastq file and leave the control column empty
+STRETCH: deal with replicates
+STRETCH: verify accuracy
+"""
+# build table
+df = pd.DataFrame(columns=["experimental_file", "control_file"])
 
-# get_file('ENCSR101FJM')
+# get batch download of available files
+batch_url_exper = build_url(BATCH_DOWNLOAD, EXPERIMENTAL)
+get_batch_download_text_file(batch_url_exper, EXPERIMENTAL)
 
-# get_search_result()
+batch_url_controls = build_url(BATCH_DOWNLOAD, CONTROL)
+get_batch_download_text_file(batch_url_controls, CONTROL)
 
-match_exper_to_controls()
+# get json search results
+search_url_exper = build_url(SEARCH, EXPERIMENTAL)
+print(search_url_exper)
+get_search_results(search_url_exper, 'exper-search-results')
+
+search_url_controls = build_url(SEARCH, CONTROL)
+print(search_url_controls)
+get_search_results(search_url_controls, 'controls-search-results')
+
+# match up each experimental sample to its control(s)
+match_exper_to_controls(df)
+
+print(df)
 
