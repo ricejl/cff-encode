@@ -44,7 +44,25 @@ def build_url(result_type : str, control_type : str):
 
 
 def get_fastq_download_url(experiment_accession : str):
-    return f'https://www.encodeproject.org/batch_download/?files.file_type=fastq&type=Experiment&@id=%2Fexperiments%2{experiment_accession}%2F&files.output_category=raw+data'
+    return f'https://www.encodeproject.org/batch_download/?files.file_type=fastq&type=Experiment&@id=/experiments/{experiment_accession}/&files.output_category=raw+data'
+
+
+def get_fastq_filenames(accession):
+    batch_download_url = get_fastq_download_url(accession)
+
+    response = requests.get(batch_download_url)
+    if response.status_code == 200:
+        data = response.text
+
+        data_list = []
+        lines = data.split('\n')[1:-1]
+        for line in lines:
+            split_line = line.split('/')
+            filename = split_line[-1]
+            data_list.append(filename)
+        return ','.join(data_list)
+    else:
+        print('API call failed')
 
 
 def get_search_results(url):
@@ -65,25 +83,26 @@ def match_exper_to_controls(exper_search):
 
     data = []
     for exper_accession in exper_accessions:
-        exper_file_url = get_fastq_download_url(exper_accession)
+        exper_fastq_filenames = get_fastq_filenames(exper_accession)
+
         exper_file = get_file_from_api(exper_accession)
         possible_controls = exper_file.get('possible_controls', [])
 
         if len(possible_controls) > 0:
             for control in possible_controls:
                 control_accession = control.split('/')[2]
-                control_file_url = get_fastq_download_url(control_accession)
+                control_fasq_filenames = get_fastq_filenames(control_accession)
 
-                data.append({'experimental_file': exper_file_url, 'control_file': control_file_url})
+                data.append({'experimental_files': exper_fastq_filenames, 'control_files': control_fasq_filenames})
         else:
-            data.append({'experimental_file': exper_file_url})
+            data.append({'experimental_files': exper_fastq_filenames})
 
     return data
         
 
 
 # build table
-df = pd.DataFrame(columns=["experimental_file", "control_file"])
+df = pd.DataFrame(columns=['experimental_files', 'control_files'])
 
 # get json search results
 search_url_exper = build_url(SEARCH, EXPERIMENTAL)
